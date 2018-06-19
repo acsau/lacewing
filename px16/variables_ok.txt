@@ -1,0 +1,13 @@
+volatile unsigned char rx_buf[64]={0};
+volatile unsigned char btrx = 0;
+volatile unsigned char bttx = 0;
+volatile unsigned char ttn_play = 0;
+volatile unsigned int u1r_buf=0;
+volatile unsigned int tmp=0;
+volatile unsigned int read=0;
+volatile unsigned int error_dac = 0;
+
+
+static uint16_t spi_ttn_tx[1031];
+static uint16_t spi_ttn_rx[2048];
+static char uart_send[32];

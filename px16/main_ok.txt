@@ -1,0 +1,85 @@
+#include "p24FJ128GA202.h"
+#include "config.h"
+#include <xc.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+#define FCY 32000000ul       //Instruction Cycle Frequency (FRCPLL: Fcy = Fosc/2 = 64Mhz/2)
+
+#include <libpic30.h>
+#include "variables.h"
+#include "initialize.h"
+
+//MAIN
+int main()
+{	
+	sys_init();
+	ttn_init(10, 120);
+	uint16_t row_max = 78;
+	uint16_t col_max = 56;
+	uint16_t row = 0;
+	uint16_t col = 0;
+	uint16_t vs = 0;
+	int d;
+	int e;
+	//ttn_onepxexp(spi_ttn_tx, spi_ttn_rx);
+// START WHILE LOOP
+	while(1){
+//if (bttx == 1){
+//	for (d = 0; d<2500; d++)
+//	{
+//		U1TXREG = (char)d ;
+//		while(U1STAbits.TRMT==0);
+//	}
+//	bttx = 0;
+//}
+	//ttn_onepxexp(spi_ttn_tx, spi_ttn_rx);
+	if (ttn_cmd == 7){
+		for(vs=0; vs<1024; vs+=50){
+		while(col<col_max){
+			while(row<row_max){
+				// Change pixel
+				ttn_rowcol(row, col);
+			//	__delay_us(10);
+				// Read previous pixel at Vs value
+				ttn_pxvs(vs);				
+				//__delay_us(25);
+				// Same col, next row
+				row++;
+			}
+			// Next col
+			col++;
+			// Reset to first row
+			row = 0;
+		}	
+		// Reset to first col
+		col = 0;
+		// Firefly end frame	
+		U1TXREG = (char)0xFF ;	
+		while(U1STAbits.TRMT==0);
+		__delay_ms(1000);
+		}	
+	}
+	};
+// END WHILE LOOP
+
+
+	// Load new data into DAC input registers
+	//while(!SPI2STATLbits.SPITBE);
+	//int b = 0;
+	//for (b=0; b<1024; b++){
+	//SPI2BUFL = spi_dac_reg(0, 1, 1, 1, b);
+	//__delay_us(10);
+	//__delay_us(500);
+	//LATBbits.LATB6 = 0;		// Hold LDAC low
+	//__delay_us(5);			
+	//LATBbits.LATB6 = 1;		// Hold LDAC high
+	//}
+
+	//char *data = "\n";
+	//uart1_tx(data);
+	return 0;
+}

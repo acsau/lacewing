@@ -1,0 +1,164 @@
+void isr_init()
+{	
+	// Note that all interrupts are reset to priority 4
+	INTCON1bits.NSTDIS = 1;	// Disable nested interrupts
+
+	// Disable SPI1 interrupts
+	IEC0bits.SPI1TXIE = 0;	// Tx
+	IEC0bits.SPI1IE = 0;	// General
+	IEC3bits.SPI1RXIE = 0;	// Rx
+
+	// Clear SPI1 interrupt flags
+	IFS0bits.SPI1TXIF = 0;
+	IFS0bits.SPI1IF = 0;
+	IFS3bits.SPI1RXIF = 0;
+
+	// SPI1 ISR Priority
+	//IPC2bits.SPI1TXIP = 0x05;
+	//IPC2bits.SPI1IP = 0x05;
+	//IPC14bits.SPI1RXIP = 0x05;
+
+	// Disable SPI2 interrupts
+	IEC2bits.SPI2TXIE = 0;	// Tx
+	IEC2bits.SPI2IE = 0;	// General
+	IEC3bits.SPI2RXIE = 0;	// Rx
+
+	// Clear SPI2 interrupt flags
+	IFS2bits.SPI2TXIF = 0;
+	IFS2bits.SPI2IF = 0;
+	IFS3bits.SPI2RXIF = 0;
+
+	// SPI2 ISR Priority
+	//IPC8bits.SPI2TXIP = 0x05;
+	//IPC8bits.SPI2IP = 0x05;
+	//IPC14bits.SPI2RXIP = 0x05;
+
+	// Enable SPI2 interrupts
+	//IEC3bits.SPI2RXIE = 1;	// Rx
+
+	IEC0bits.U1TXIE = 0;	// Disable UART1 Transmit Interrupts
+	IFS0bits.U1TXIF = 0;	// Clear the U1 Transmit Interrupt Flag
+	
+	IEC0bits.U1RXIE = 0;	// Disable UART1 Recieve Interrupts
+	//IPC2bits.U1RXIP = 0x05;// Set Interrupt Priority Level 5
+	IFS0bits.U1RXIF = 0;	// Clear the Recieve Interrupt Flag	
+	IEC0bits.U1RXIE = 1;	// Enable Recieve Interrupts
+	
+}
+
+void __attribute__((__interrupt__, auto_psv)) _U1RXInterrupt(void)
+{   
+	LATBbits.LATB2 = 1;		// Turn on LED
+	if (U1STAbits.OERR == 1) // Clear RX overrun flag
+	{
+		U1STAbits.OERR = 0;
+	} 
+	else 
+	{
+   		while(U1STAbits.URXDA)
+		{
+			//rx_buf[u1r_buf] = U1RXREG; 
+			//U1TXREG = rx_buf[u1r_buf];
+			//U1TXREG = U1RXREG;
+			btrx = U1RXREG;
+			//int d;
+			//int e;
+			switch(btrx){
+				case 'Q': U1TXREG = 'a';
+						while(U1STAbits.TRMT==0);
+						U1TXREG = (char)0xFF ;
+						while(U1STAbits.TRMT==0);
+				break;
+				case 'R': U1TXREG = 'b';
+						while(U1STAbits.TRMT==0);
+						U1TXREG = (char)0xFF ;
+						while(U1STAbits.TRMT==0);
+				break;
+				case 'S': U1TXREG = 'c';
+						while(U1STAbits.TRMT==0);
+						U1TXREG = (char)0xFF ;
+						while(U1STAbits.TRMT==0);
+				break;
+				case 'T': U1TXREG = 'd';
+						while(U1STAbits.TRMT==0);
+						U1TXREG = (char)0xFF ;
+						while(U1STAbits.TRMT==0);
+				break;
+				case 'U': U1TXREG = 'e';
+						while(U1STAbits.TRMT==0);
+						U1TXREG = (char)0xFF ;
+						while(U1STAbits.TRMT==0);
+				break;
+				case 'V': U1TXREG = 'f';
+						while(U1STAbits.TRMT==0);
+						U1TXREG = (char)0xFF ;
+						while(U1STAbits.TRMT==0);
+				break;
+				case 'W': 
+						ttn_play = 1;
+						//for (d = 0; d<4368; d++)
+						//{
+						//	U1TXREG = (char)(d >> 8);
+						//	while(U1STAbits.TRMT==0);
+						//	U1TXREG = (char)d ;
+						//	while(U1STAbits.TRMT==0);
+						//}
+						//U1TXREG = (char)0xFF ;
+						//while(U1STAbits.TRMT==0);
+						//__delay_ms(1000);
+						//for (e = 4368; e>0; e--)
+						//{
+						//	U1TXREG = (char)(e >> 8);
+						//	while(U1STAbits.TRMT==0);
+						//	U1TXREG = (char)e ;
+						//	while(U1STAbits.TRMT==0);
+						//}
+						//U1TXREG = (char)0xFF ;
+						//while(U1STAbits.TRMT==0);
+						//__delay_ms(1000);
+						//for (d = 0; d<4368; d++)
+						//{
+						//	U1TXREG = (char)(d >> 8);
+						//	while(U1STAbits.TRMT==0);
+						//	U1TXREG = (char)d ;
+						//	while(U1STAbits.TRMT==0);
+						//}
+						//U1TXREG = (char)0xFF ;
+						//while(U1STAbits.TRMT==0);
+						//__delay_ms(1000);
+						//for (e = 4368; e>0; e--)
+						//{
+						//	U1TXREG = (char)(e >> 8);
+						//	while(U1STAbits.TRMT==0);
+						//	U1TXREG = (char)e ;
+						//	while(U1STAbits.TRMT==0);
+						//}
+						//U1TXREG = (char)0xFF ;
+						//while(U1STAbits.TRMT==0);
+						
+				break;
+			
+				case 'X': 
+						ttn_play = 0;
+						//for (e = 4368; e>0; e--)
+						//{
+						//	U1TXREG = (char)(e >> 8);
+						//	while(U1STAbits.TRMT==0);
+						//	U1TXREG = (char)e ;
+						//	while(U1STAbits.TRMT==0);
+						//}
+						//U1TXREG = (char)0xFF ;
+						//while(U1STAbits.TRMT==0);
+				break;
+				}
+			}
+			//if (btrx == 'V'){
+			//	__delay_ms(1000);
+			//	U1TXREG = 'f';
+			//	while(U1STAbits.TRMT==0);
+			//}
+    	
+	}
+	LATBbits.LATB2 = 0;		// Turn off LED
+	IFS0bits.U1RXIF = 0; 
+}

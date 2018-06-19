@@ -1,0 +1,327 @@
+#define spi1baudrate       	8000000ul  		//Baud rate in Hz
+#define spi2baudrate       	2000000ul  		//Baud rate in Hz
+
+void spi_ttn_init(){
+	SPI1CON1Lbits.SPIEN = 0; 	// Turns off and resets module, disables clocks, disables interrupt event generation, allows SFR modifications
+	
+	unsigned int spi1baud = ((FCY/2)/spi1baudrate)-1;
+
+	SPI1BUFL = 0;				// Clear SPI1 buffer (low)
+	SPI1BUFH = 0;				// Clear SPI1 buffer (high) (unused in 16-bit data mode)
+	SPI1CON1L = 0x0620;			// Master mode; 16-bit; SMP=1; Clock L-H rising edge triggered; Enhanced Buffer Mode disabled
+	SPI1CON1H = 0x1018;			// Disable audio mode; disable Framed SPI; disable auto-SS; Frame Sync in master, SS active-low, one word length, pulse each word; ROV critical error; TUR error ignore	
+	SPI1CON2L = 0x0000;			// SPI2 variable word length SFR: directed to check SPI2CON1Lbits.MODE<32,16> (set at 16 bits data)	
+	SPI1STATL = 0x0000;			// Clear receive overflow and frame error status bits
+	SPI1BRGL = spi1baud;		// Set SCK speed
+
+	SPI1CON1Lbits.SPIEN = 1;	// Enable SPI1
+}
+
+void spi_ddac_init(){
+	SPI2CON1Lbits.SPIEN = 0; 	// Turns off and resets module, disables clocks, disables interrupt event generation, allows SFR modifications
+	
+	unsigned int spi2baud = ((FCY/2)/spi2baudrate)-1;
+
+	SPI2BUFL = 0;				// Clear SPI2 buffer (low)
+	SPI2BUFH = 0;				// Clear SPI2 buffer (high) (unused in 16-bit data mode)
+	SPI2CON1L = 0x0430;			// Master mode; 16-bit; Clock H-L rising edge triggered; no SDI; Enhanced Buffer Mode disabled
+	SPI2CON1H = 0x1018;			// Disable audio mode; disable Framed SPI; disable auto-SS; Frame Sync in master, SS active-low, one word length, pulse each word; ROV critical error; TUR error ignore	
+	SPI2CON2L = 0x0000;			// SPI2 variable word length SFR: directed to check SPI2CON1Lbits.MODE<32,16> (set at 16 bits data)	
+	SPI2STATL = 0x0000;			// Clear receive overflow and frame error status bits
+	SPI2BRGL = spi2baud;		// Set SCK speed
+
+	SPI2CON1Lbits.SPIEN = 1;	// Enable SPI2
+}
+
+static void ttn_onepxexp(uint16_t *tx, uint16_t *rx){
+	uint16_t rst_ttn = 8192;
+	
+	uint16_t row = 7;
+	uint16_t col = 7;
+	uint16_t row_seq = 49152 + row*16;
+	uint16_t col_seq = 51200 + col*32;
+
+	uint16_t rst_dur = 10;
+	uint16_t rst_dur_seq = 34048 + rst_dur;
+
+	uint16_t pwm_max = 120;
+	uint16_t pwm_max_seq = 34304 + pwm_max;
+
+	tx[0] = rst_ttn;
+	tx[1] = rst_dur_seq;
+	tx[2] =	pwm_max_seq;
+	tx[3] = row_seq;
+	tx[4] = col_seq;
+
+
+	int t, r;
+
+	int vs = 0;	
+	for (vs = 0; vs<1024; vs++)
+	{
+		tx[5+vs] = (uint16_t)(0xD000 | vs);
+	}
+
+//	for (vs = 0; vs<1024; vs++)
+//	{
+//		tx[5+vs] = (uint16_t)(0xD200);
+//	}
+
+	for (r = 0; r<1031; r++)
+	{
+		rx[r] = 0x4161;
+	}
+
+	//rx[0] = SPI1BUFL;
+
+	while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = tx[0];
+	while(SPI1STATLbits.SPIRBF == 0);
+	rx[1] = SPI1BUFL;
+	__delay_ms(10);
+
+	for(t=1; t<5; t++)
+	{
+		while(SPI1STATLbits.SPITBF);
+		SPI1BUFL = tx[t];
+		while(SPI1STATLbits.SPIRBF == 0);
+		rx[t+1] = SPI1BUFL;
+		__delay_us(10);
+	}
+
+	for (t=5; t<1030; t++)
+	{	
+		while(SPI1STATLbits.SPITBF);
+		SPI1BUFL = tx[t];
+		while(SPI1STATLbits.SPIRBF == 0);
+		rx[t+1] = SPI1BUFL;
+		__delay_us(25);
+	}
+
+//Transmit via Bluetooth to Android phone
+	int j;
+	for(j=0;j<1031;j++)
+	{
+		// Shift MSByte
+		U1TXREG = (char)(rx[j] >> 8);
+		while(U1STAbits.TRMT==0);
+		// Shift LSByte
+		U1TXREG = (char)rx[j];
+		while(U1STAbits.TRMT==0);
+	}	
+
+//	SPI1CON1Lbits.SPIEN = 0;
+
+}
+//
+/***Function to generate sequence required for DAC MCP4922 output
+*	
+*	I/P arg: DAC channel A:0 B:1; Vref buffer N:0 Y:1; gain 1x:1 or 2x:0 ; shutdown Y:0 N:1; DAC output ratio data D -> Vout = (Vref * gain * D) / 1024
+*	O/P arg: DAC control sequence as an unsigned 16-bit interger
+*/
+uint16_t spi_dac_reg(uint16_t dac_sel, uint16_t dac_vbuf, uint16_t dac_gain, uint16_t dac_shdn, uint16_t dac_val){
+	// Bit-shift each parameter to the correct position
+	uint16_t sel = dac_sel << 15;
+	uint16_t vbuf = dac_vbuf << 14;
+	uint16_t gain = (dac_gain == 1 ? 1:0) << 13;
+	uint16_t shdn = dac_shdn << 12;
+	uint16_t val = dac_val << 2;
+
+	// Initialize dac_output variable
+	uint16_t dac_reg = 0;
+	dac_reg = sel | vbuf | gain | shdn | val ;
+
+ 	return dac_reg;
+}
+
+/*void spi2_dac_send(uint16_t dac_sel, uint16_t dac_vbuf, uint16_t dac_gain, uint16_t dac_shdn, uint16_t dac_val)
+{
+	// Bit-shift each parameter to the correct position
+	uint16_t sel = dac_sel << 15; //A:0 and B:1
+	uint16_t vbuf = dac_vbuf << 14;
+	uint16_t gain = (dac_gain == 1 ? 1:0) << 13;
+	uint16_t shdn = dac_shdn << 12;
+	uint16_t val = dac_val;
+
+	uint16_t dac_reg = sel | vbuf | gain | shdn | val;
+ 	SPI2BUFL = dac_reg;
+}*/
+
+static void ttn_init(const uint16_t rst_dur, const uint16_t pwm_max){
+	uint16_t rst_ttn = 8192;
+	uint16_t rst_dur_seq = 34048 + rst_dur;
+	uint16_t pwm_max_seq = 34304 + pwm_max;
+	
+	// Reset TTN
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = rst_ttn;
+	while(SPI1STATLbits.SPIRBF == 0);
+	tmp = SPI1BUFL;
+	__delay_ms(100);
+
+	SPI1BUFL = 0x8E80;
+	while(SPI1STATLbits.SPIRBF == 0);
+	tmp = SPI1BUFL;
+
+	// Define reset duration of pixel before measurement
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = rst_dur_seq;
+	while(SPI1STATLbits.SPIRBF == 0);
+	tmp = SPI1BUFL;
+//	__delay_us(8);
+
+	// Define PWM max width
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = pwm_max_seq;
+	while(SPI1STATLbits.SPIRBF == 0);
+	tmp = SPI1BUFL;
+//	__delay_us(8);
+}
+
+static void ttn_rowcol(const uint16_t row, const uint16_t col){
+	uint16_t row_seq = 49152 + row*16;
+	uint16_t col_seq = 51200 + col*32;
+
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = row_seq;
+	while(SPI1STATLbits.SPIRBF == 0);
+	tmp = SPI1BUFL;
+	//__delay_us(10);
+	__delay_us(20);
+	
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = col_seq;
+	while(SPI1STATLbits.SPIRBF == 0);
+	tmp = SPI1BUFL;
+	//__delay_us(10);
+	__delay_us(20);
+}
+
+static void ttn_row(const uint16_t row){
+	uint16_t row_seq = 49152 + row*16;
+
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = row_seq;
+	while(SPI1STATLbits.SPIRBF == 0);
+	tmp = SPI1BUFL;
+	//__delay_us(10);
+	//__delay_us(20);
+}
+
+static void ttn_col(const uint16_t col){
+	uint16_t col_seq = 51200 + col*32;
+
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = col_seq;
+	while(SPI1STATLbits.SPIRBF == 0);
+	tmp = SPI1BUFL;
+	//__delay_us(10);
+//	__delay_us(20);
+}
+
+static void ttn_ramwrite(const uint16_t vs){
+	// Store Vs value in RAM
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = (int)(0xDC00 | vs);
+
+	// Discard the previous value		
+	while(SPI1STATLbits.SPIRBF == 0);
+	tmp = SPI1BUFL;	
+	__delay_us(15);
+	//__delay_us(20);
+}
+
+static void ttn_ramread(){
+	// Read Vs value in RAM
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = 0xD800;
+
+	// Discard the previous value		
+	while(SPI1STATLbits.SPIRBF == 0);
+	tmp = SPI1BUFL;
+	__delay_us(10);
+	//__delay_us(20);
+
+	// Send zero-RAM command					
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = 0xDC00;
+
+	// Read this value
+	while(SPI1STATLbits.SPIRBF == 0);
+	//read = SPI1BUFL;
+
+	tmp = SPI1BUFL;
+	__delay_us(10);
+//	__delay_us(20);	
+
+	read = (tmp >> 6);
+	//read = (read >> 6);
+}
+
+static void ttn_pxvo(const uint16_t vs){
+	// Send command to read pixel with Vs value
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = (uint16_t)(0xD000 | vs);
+
+	// Discard the previous value		
+	while(SPI1STATLbits.SPIRBF == 0);
+	tmp = SPI1BUFL;
+	//__delay_us(10);
+	//__delay_us(15);
+	//__delay_us(25);
+__delay_us(30);
+
+	// Send zero-RAM command					
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = 0xDC00;
+
+	// Read this value
+	while(SPI1STATLbits.SPIRBF == 0);
+	read = SPI1BUFL;
+	//__delay_us(10);
+	//__delay_us(8);
+	__delay_us(15);
+}	
+
+static void ttn_pxvoRef(const uint16_t vs){
+	// Send command to read pixel with Vs value
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = (uint16_t)(0xD000 | vs);
+
+	// Discard the previous value		
+	while(SPI1STATLbits.SPIRBF == 0);
+	tmp = SPI1BUFL;
+//	__delay_us(50);
+	__delay_us(50);
+//	__delay_us(25);
+
+	// Send zero-RAM command					
+	//while(SPI1STATLbits.SPITBF);
+	SPI1BUFL = 0xDC00;
+
+	// Read this value
+	while(SPI1STATLbits.SPIRBF == 0);
+	read = SPI1BUFL;
+	__delay_us(15);
+	//__delay_us(8);
+}
+	
+static void pxe_ffy(int data){
+	//Transmit via Bluetooth to Android phone
+	// Shift MSByte
+	U1TXREG = (char)(data >> 8);
+	while(U1STAbits.TRMT==0);
+//	__delay_us(10);
+	// Shift LSByte
+	U1TXREG = (char)data;
+	while(U1STAbits.TRMT==0);
+//	__delay_us(10);
+}
+
+static void dac_load(){
+	__delay_us(10);
+	LATBbits.LATB6 = 0;		// Hold LDAC low
+	__delay_us(5);			
+	LATBbits.LATB6 = 1;		// Hold LDAC high
+	__delay_us(50);	
+}

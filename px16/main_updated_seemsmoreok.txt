@@ -1,0 +1,410 @@
+#include "p24FJ128GA202.h"
+#include "config.h"
+#include <xc.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+#define FCY 32000000ul       //Instruction Cycle Frequency (FRCPLL: Fcy = Fosc/2 = 64Mhz/2)
+
+#include <libpic30.h>
+#include "variables.h"
+#include "initialize.h"
+#include "vref_search.h"
+#include "peltier_controller.h"
+
+//MAIN
+int main()
+{	
+	sys_init();
+	uint16_t gg = 0;
+// START WHILE LOOP
+	while(1){
+		switch(ttn_cmd){
+			case 1: // INITALIZE TTN
+				LATBbits.LATB2 = 1;		// Turn on LED
+
+				// Reset TTN;
+				// Reset duration per px = 5 for 8MHz; 
+				// PWM max width = 90 to cap digital value at around 1400
+				ttn_init(5, 90);
+
+				// Check TTN is connected and operational using temperature px
+				ttn_rowcol(1,1);
+				ttn_ramwrite(0);
+				vs = 0;
+				read = 0;
+				// Sweep Vs from 0 to 1023 until vreg reached
+				while(vs<1024 && read<vreg){						
+					// Read pixel at Vs value
+					ttn_pxvo(vs);
+					vs++;
+				}
+				vs--;
+				// Compare Vs,tau with optimal range
+				if(vs>255 && vs<426){					
+					// ACK and BT string end to Firefly
+					U1TXREG = 'a';
+					while(U1STAbits.TRMT==0);
+					pxe_ffy(end);
+				}
+				else{				
+					// BAD RESULT and BT string end to Firefly
+					U1TXREG = 'n';
+					while(U1STAbits.TRMT==0);
+					pxe_ffy(end);
+				}
+				// Operation complete, deassert flag
+				ttn_cmd = 0;
+				LATBbits.LATB2 = 0;		// Turn off LED
+			break;
+			case 2:	// TAKE TEMPERATURE FOOTPRINT
+				LATBbits.LATB2 = 1;		// Turn on LED				
+				
+				// Traverse all temperature px
+				for(col=1; col<col_max; col+=3){
+					for(row=1; row<row_max; row+=3){
+						// Change pixel
+						ttn_rowcol(row, col);
+						ttn_ramwrite(0);
+						vs = 0;
+						read = 0;
+						// Sweep Vs from 0 to 1023 until vreg reached
+						while(vs<1024 && read < (vreg-tol)){						
+							// Read pixel at Vs value
+							ttn_pxvo(vs);
+							vs++;
+						}
+						// Store correct Vs in RAM
+						vs--;
+						ttn_ramwrite(vs);
+						// Send to Firefly
+						pxe_ffy(vs);
+					}
+				}
+
+				// Operation complete, deassert flag
+				ttn_cmd = 0;
+				// ACK and BT string end to Firefly
+				U1TXREG = 'b';
+				while(U1STAbits.TRMT==0);
+				pxe_ffy(end);
+				LATBbits.LATB2 = 0;		// Turn off LED
+			break;
+			case 3:	// SEARCH OPTIMAL REFERENCE ELEDTRODE VOLTAGE
+				LATBbits.LATB2 = 1;		// Turn on LED
+
+				
+				//gg = vref_search();
+
+				// Operation complete, deassert flag
+				ttn_cmd = 0;
+				// ACK and BT string end to Firefly
+				U1TXREG = 'd';
+				while(U1STAbits.TRMT==0);
+				pxe_ffy(end);
+				LATBbits.LATB2 = 0;		// Turn off LED
+			break;
+			case 4:	// CALIBRATE ARRAY Vs VALUES	
+				LATBbits.LATB2 = 1;		// Turn on LED
+
+				int v1=0;
+				int v2=0;
+				for(col=0; col<col_max; col++){
+					for(row=0; row<row_max; row++){						
+						// Change pixel and clear RAM
+						ttn_rowcol(row, col);
+						ttn_ramwrite(0);
+						// Read pixel Vout at Vs 0
+						ttn_pxvo(0);
+						v1 = read;
+						// Read pixel Vout at Vs 700
+						ttn_pxvo(700);
+						v2 = read;
+						
+						// Determine if px is ON/OFF
+
+						// Px ON, find Vs,tau
+						if(v1<100 && v2>(vreg-tol)){
+							vs = 0;
+							read = 0;
+							// Sweep Vs from 0 to 1023 until vreg reached
+							while(vs<1024 && read < (vreg-tol)){						
+								// Read pixel at Vs value
+								ttn_pxvo(vs);
+								vs++;
+							}
+							// Store correct Vs in RAM
+							vs--;
+							ttn_ramwrite(vs);
+						}
+						// Px discharge too fast, write 0 to RAM
+						else if(v1<100 && v2<100){
+							vs = 0;
+							ttn_ramwrite(vs);
+						}
+						// Px discharge too slow, write 1023 to RAM
+						else if(v1>(vreg-tol) && v2>(vreg-tol)){
+							vs = 1023;
+							ttn_ramwrite(vs);
+						}	
+						// Send to Firefly
+						pxe_ffy(vs);				
+					}					
+				}
+
+				// Operation complete, deassert flag
+				ttn_cmd = 0;
+				// ACK and BT string end to Firefly
+				U1TXREG = 'e';
+				while(U1STAbits.TRMT==0);
+				// Firefly end frame
+				pxe_ffy(end);
+				LATBbits.LATB2 = 0;		// Turn off LED
+			break;
+			case 5:	// LOAD TEMPERATURE FOOTPRINT
+				LATBbits.LATB2 = 1;		// Turn on LED
+				__delay_ms(500);
+
+				// Traverse all temperature px
+				for(col=1; col<col_max; col+=3){
+					for(row=1; row<row_max; row+=3){
+						// Change pixel
+						ttn_rowcol(row, col);
+						// Store correct Vs in RAM
+						vs = (tempfootprint[count] << 8) | tempfootprint[count+1];
+						ttn_ramwrite(vs);
+						count+=2;
+					}
+				}			
+				
+				// Operation complete, deassert flag
+				ttn_cmd = 0;
+				// ACK and BT string end to Firefly
+				U1TXREG = 'c';
+				while(U1STAbits.TRMT==0);
+				pxe_ffy(end);
+				LATBbits.LATB2 = 0;		// Turn off LED
+			break;
+			case 6:	// REGULATE PELTIER TO 63C
+				LATBbits.LATB2 = 1;		// Turn on LED
+				
+	/*			temperr_prev = 0;
+
+				while(temperr>50){
+					tempnew = 0;
+					// Traverse all temperature px
+					for(col=1; col<col_max; col+=3){
+						for(row=1; row<row_max; row+=3){
+							// Change pixel
+							ttn_rowcol(row, col);
+	
+							// Read and clear RAM
+							ttn_ramread();
+							vs = read;
+						
+							// Read current Vout
+							ttn_pxvo(vs);
+							tempnew += read;
+							
+							// Restore RAM Vs
+							ttn_ramwrite(vs);
+						}
+					}
+	
+					// Compute mean temperature of this frame
+					tempnew = tempnew/494;
+					pxe_ffy(tempnew);					
+					
+					// Temperature controller; Ensure within 10-bit DAC limits
+					temperr = tempnew - tempref;
+	
+					// Proportional
+					tempP = tempPk*temperr;
+					if(tempP>1000){tempP=1000;}
+					else if(tempP<-1000){tempP=-1000;}
+	
+					// Integral
+					tempI = tempPi*(temperr+temperr_prev);
+					if(tempI>1000){tempI=1000;}
+					else if(tempI<-1000){tempI=-1000;}
+					
+					// Derivative
+					tempD = tempPd*(temperr-temperr_prev);
+					if(tempD>1000){tempD=1000;}
+					else if(tempD<-1000){tempD=-1000;}
+	
+					// New DAC value
+					tempdac = 512 + tempP + tempI + tempD;
+					if(tempdac>1000){tempdac=1000;}
+					else if(tempdac<0){tempdac=0;}
+					
+					temperr_prev = temperr;
+	
+					// Send to DAC
+					SPI2BUFL = spi_dac_reg(1, 1, 1, 1, tempdac);
+					__delay_us(10);
+					//__delay_us(500);
+					LATBbits.LATB6 = 0;		// Hold LDAC low
+					__delay_us(5);			
+					LATBbits.LATB6 = 1;		// Hold LDAC high
+
+
+				};
+		*/			// Operation complete, deassert flag
+				ttn_cmd = 0;
+				// ACK and BT string end to Firefly
+				U1TXREG = 'f';
+				while(U1STAbits.TRMT==0);
+				pxe_ffy(end);
+				LATBbits.LATB2 = 0;		// Turn off LED
+			break;
+			case 7: // ARRAY READOUT
+				LATBbits.LATB2 = 1;		// Turn on LED
+
+				temperr_prev = 0;
+				while(ttn_cmd == 7){
+					tempnew = 0;
+					for(col=0; col<col_max; col++){
+						for(row=0; row<row_max; row++){
+							// Change pixel
+							ttn_rowcol(row, col);
+							// Read and clear RAM Vs value
+							ttn_ramread();
+							vs = read;
+							// Temperature px
+							if(col%3==1 && row%3==1){
+								// Read current Vout
+								ttn_pxvo(vs);
+								tempnew += read;
+							}
+							// Chemical px
+							else{
+								// Intermediate calib Vs of active px
+								if(vs!=0 && vs!=1023){
+									int v3=0;
+									int v4=0;
+									// Read pixel Vout at Vs 0
+									ttn_pxvo(0);
+									v3 = read;
+									// Read pixel Vout at Vs 700
+									ttn_pxvo(700);
+									v4 = read;
+									
+									// Determine if px is OFF
+			
+									// Px discharge too fast, set Vs 0
+									if(v3<100 && v4<100){
+										vs = 0;
+									}
+									// Px discharge too slow, set Vs 1023
+									else if(v3>(vreg-tol) && v4>(vreg-tol)){
+										vs = 1023;
+									}
+									else if(v3<100 && v4>(vreg-tol)){
+										// Read pixel at Vs value
+										ttn_pxvo(vs);
+										if(read<(vreg-tol) && vs<1020){
+											while(read<(vreg-tol) && vs<1020){
+												vs++;
+												ttn_pxvo(vs);											
+											};
+										}
+										else if(read>(vreg+tol) && vs>4){
+											while(read<(vreg-tol) && vs<1020){
+												vs--;
+												ttn_pxvo(vs);											
+											};
+										}
+									}
+								}
+							}
+							// Store Vs in RAM
+							ttn_ramwrite(vs);
+							// Send value to Firefly
+							pxe_ffy(vs);
+						}
+					}					
+
+					// Compute mean temperature of this frame
+					tempnew = tempnew/494;
+					pxe_ffy(tempnew);
+
+					// Firefly end frame	
+					pxe_ffy(end);					
+					
+/*					// Temperature controller; Ensure within 10-bit DAC limits
+					temperr = tempnew - tempref;
+
+					// Proportional
+					tempP = tempPk*temperr;
+					if(tempP>1000){tempP=1000;}
+					else if(tempP<-1000){tempP=-1000;}
+
+					// Integral
+					tempI = tempPi*(temperr+temperr_prev);
+					if(tempI>1000){tempI=1000;}
+					else if(tempI<-1000){tempI=-1000;}
+					
+					// Derivative
+					tempD = tempPd*(temperr-temperr_prev);
+					if(tempD>1000){tempD=1000;}
+					else if(tempD<-1000){tempD=-1000;}
+
+					// New DAC value
+					tempdac = 512 + tempP + tempI + tempD;
+					if(tempdac>1000){tempdac=1000;}
+					else if(tempdac<0){tempdac=0;}
+					
+					temperr_prev = temperr;
+
+					// Send to DAC
+					SPI2BUFL = spi_dac_reg(1, 1, 1, 1, tempdac);
+					__delay_us(10);
+					//__delay_us(500);
+					LATBbits.LATB6 = 0;		// Hold LDAC low
+					__delay_us(5);			
+					LATBbits.LATB6 = 1;		// Hold LDAC high
+*/
+					__delay_ms(1000);
+				};
+
+				// Operation complete, deassert flag
+				ttn_cmd = 0;
+				LATBbits.LATB2 = 0;		// Turn off LED
+			break;	
+		}
+	};
+// END WHILE LOOP
+	return 0;
+}
+
+/* RAM READ
+for(col=0; col<col_max; col++){
+					for(row=0; row<row_max; row++){						
+						// Change pixel
+						ttn_rowcol(row, col);	
+						ttn_ramread();	
+						pxe_ffy();			
+					}					
+				}
+*/
+/* DAC Sawtooth wave
+
+	// Load new data into DAC input registers
+	//while(!SPI2STATLbits.SPITBE);
+	int b = 0;
+	for (b=0; b<1024; b++){
+	SPI2BUFL = spi_dac_reg(0, 1, 1, 1, b);
+	__delay_us(10);
+	//__delay_us(500);
+	LATBbits.LATB6 = 0;		// Hold LDAC low
+	__delay_us(5);			
+	LATBbits.LATB6 = 1;		// Hold LDAC high
+	}
+
+*/
+
+
