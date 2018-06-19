@@ -1,0 +1,86 @@
+<resources>
+    <string name="app_name">Firefly</string>
+    <string name="about">about</string>
+    <string name="title_info">Information</string>
+    <string name="title_dgns">Diagnostics</string>
+    <string name="title_maps">Location</string>
+
+    <string name="home_menu">Main Menu</string>
+    <string name="bluetooth_connect">Bluetooth</string>
+    <string name="temp">Temp: ??</string>
+    <string name="select_id">Select Patient Reference Code</string>
+    <string name="new_id">Add New Reference</string>
+
+    <string name="not_connected">ERROR\nYou are not connected to a device</string>
+    <string name="bt_not_enabled_leaving">ERROR\nBluetooth was not enabled, disabling Pixie functions.
+        Entering offline mode.</string>
+    <string name="send">Send</string>
+    <string name="tcode_empty">ERROR\nPlease enter a new trial code</string>
+    <string name="tcode_ready">Trial code registered \nReady for experiments</string>
+    <string name="tcode_exists">Trial code identified \nReady to load data</string>
+    <string name="rec_end">Experiment ended \nAll data has been recorded</string>
+
+    <!--  DeviceListActivity -->
+    <string name="scanning">Scanning for devices</string>
+    <string name="select_device">&#160;Connect to a Pixie</string>
+    <string name="none_paired">No devices have been paired</string>
+    <string name="none_found">No devices found</string>
+    <string name="title_paired_devices">Paired devices</string>
+    <string name="title_other_devices">Other available devices</string>
+    <string name="button_scan">Scan for Pixies</string>
+
+    <!--InfoFragment-->
+    <string name="dgns">The Diagnostics tab on Firefly represents the core of the Lacewing Network.
+        Interface with the Pixie, collect data, and analyze the results here.
+        \n\nSet up the Pixie by clicking the icons in the displayed top-to-bottom
+        order on the Diagnostics tab. Please wait until one command has been completed before
+        beginning the next, indicated by the status bar next to each icon.
+        \n\nTo collect new data from the Pixie, ensure Bluetooth is enabled before commencing.
+        \n\nEnter a trial reference word or number to save data to a new subfile. One patient
+        reference code can be associated with multiple trials.
+        \n\nEach run-stop cycle should be held in its own trial. If a trial number exists, data
+        collection will be disabled and only stored data can be loaded for analysis.
+        </string>
+    <string name="dgns_bt">Connect to the Pixie by clicking the icon on the top bar.
+        Click again to disconnect.</string>
+    <string name="dgns_init">Step 1: Runs pre-experiment checks on TITANICKS. Button turns red if
+        no cartridge is inserted of if the chip is non-operational. Button turns green if self-checks are successful and TITANICKS is initialized.
+        </string>
+    <string name="dgns_tfp">Step 2: Take a snapshot of the temperature in the initial environment.
+        Used for temperature regulation to ensure DNA amplification is achieved.
+        </string>
+    <string name="dgns_lfp">Step 3: Load the temperature snapshot obtained in Step 2 to the Pixie.
+        This initializes the temperature functions.
+        </string>
+    <string name="dgns_vref">Step 4: Automatically configure the reference electrode voltage for TITANICKS.
+        Maximizes the number of 'good' pixels in TITANICKS.
+        </string>
+    <string name="dgns_calib">Step 5: Fine tune and calibrate TITANICKS, preparing it for
+        experiments.
+        </string>
+    <string name="dgns_temp">Step 6: Regulate TITANICKS to 63\u2103 to facilitate DNA amplification
+        </string>
+    <string name="dgns_play">Now, the Pixie is primed for action.
+        Click \"Play\" to begin collecting data to the Firefly.
+        </string>
+    <string name="dgns_pause">To analyze the data, the Pixie must be on stand-by.
+        Click \"Pause\" to stop transmissions.
+        </string>
+    <string name="dgns_data">Load stored data from a previous trial for offline analysis.
+        </string>
+    <string name="maps">The Location menu displays all presently-reported epidemics on the
+        Lacewing Network. Clicking this tab also creates a pop-out window that displays your
+        current location and tracks your movement.
+        \n\nIf you have just activated Location Services on your device, please wait 1 minute
+        for the GPS to warm up and get a fix before accessing the pop-up map.
+        \n\nIn rare cases, if the pop-up crashes Firefly, try opening another Map app such as
+        Google Maps to get a location, then return to Firefly.
+        </string>
+    <string name="pin"> Find and report your location to the network
+        if a diagnosis returns positive for a disease.
+        </string>
+    <string name="back"> Use the in-built back navigation button on your Android device to return to
+        the home screen.
+        </string>
+
+</resources>

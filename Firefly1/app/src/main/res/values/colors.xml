@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<resources>
+    <color name="colorPrimary">#005CB7</color>
+    <color name="colorAccent">#59AED6</color>
+    <color name="imperialBlue">#003E74</color>
+    <color name="imperialNavy">#002147</color>
+    <color name="greyBlue">#d2dbef</color>
+    <color name="acsBlue">#619FDB</color>
+    <color name="black">#000000</color>
+    <color name="white">#FFFFFF</color>
+    <color name="green">#DCF7C3</color>
+    <color name="yellow">#ffdda5</color>
+    <color name="red">#FFDCDC</color>
+</resources>
