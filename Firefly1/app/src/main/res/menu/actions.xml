@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:tools="http://schemas.android.com/tools"
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:title="@string/temp"
+        android:id="@+id/temperature"
+        android:visible="false"
+        app:showAsAction="always"/>
+
+    <item
+        android:title="@string/bluetooth_connect"
+        android:id="@+id/bluetooth_scan"
+        android:icon="@mipmap/ic_bluetooth"
+        android:visible="false"
+        app:showAsAction="always"/>
+
+    <item
+        android:id="@+id/lacewing_report"
+        android:icon="@mipmap/ic_report"
+        android:visible="false"
+        app:showAsAction="always"/>
+
+</menu>
