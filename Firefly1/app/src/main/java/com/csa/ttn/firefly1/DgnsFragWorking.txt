@@ -1,0 +1,540 @@
+package com.csa.ttn.firefly1;
+
+import android.app.Activity;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Color;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.content.Intent;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
+import android.support.annotation.Nullable;
+import android.support.v4.app.Fragment;
+import android.support.v4.app.FragmentActivity;
+import android.util.Log;
+import android.view.KeyEvent;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.ImageButton;
+import android.widget.SeekBar;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.github.mikephil.charting.charts.LineChart;
+import com.github.mikephil.charting.components.XAxis;
+import com.github.mikephil.charting.data.Entry;
+import com.github.mikephil.charting.data.LineData;
+import com.github.mikephil.charting.data.LineDataSet;
+
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
+
+public class DgnsFragment extends Fragment{
+
+    private static final String TAG = "DgnsFragment";
+
+    // Intent request codes
+    private static final int REQUEST_CONNECT_DEVICE_SECURE = 1;
+    private static final int REQUEST_ENABLE_BT = 3;
+
+    // Layout Views
+    private EditText trialCode;
+    private Button trialSet;
+    private ImageButton init;
+    private ImageButton tfp;
+    private ImageButton lfp;
+    private ImageButton vref;
+    private ImageButton reg63;
+    private ImageButton calib;
+    private ImageButton run;
+    private ImageButton load;
+    private ImageButton pause;
+    private SeekBar slider;
+    private ImageView spatial;
+    private LineChart temporal;
+    private Handler handler = new Handler();
+
+    private int width = 78;
+    private int height = 56;
+    private int pixel = 0;
+    private int[] frameArray = new int[width*height];
+
+    // Switches for activating TTN configuration switches
+    private boolean swInit = false;
+    private boolean swTfp = false;
+    private boolean swLfp = false;
+    private boolean swVref = false;
+    private boolean swCalib = false;
+    private boolean swReg63 = false;
+    private boolean ttnConfigDone = false;
+
+
+    /**
+     * Name of the connected device
+     */
+    private String mConnectedDeviceName = null;
+
+    /**
+     * Array adapter for the conversation thread
+     */
+    //private ArrayAdapter<String> mConversationArrayAdapter;
+
+    /**
+     * String buffer for outgoing messages
+     */
+    private StringBuffer mOutStringBuffer;
+
+    /**
+     * Local Bluetooth adapter
+     */
+    private BluetoothAdapter mBluetoothAdapter = null;
+
+    /**
+     * Member object for the chat services
+     */
+    private BluetoothChatService mChatService = null;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setHasOptionsMenu(true);
+        // Get local Bluetooth adapter
+        mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+
+        // If the adapter is null, then Bluetooth is not supported
+        if (mBluetoothAdapter == null) {
+            FragmentActivity activity = getActivity();
+            Toast.makeText(activity, "Bluetooth is not available", Toast.LENGTH_LONG).show();
+            activity.finish();
+        }
+        // If BT is not on, request that it be enabled.
+        // setupChat() will then be called during onActivityResult
+        if (!mBluetoothAdapter.isEnabled()) {
+            Intent enableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+            startActivityForResult(enableIntent, REQUEST_ENABLE_BT);
+            // Otherwise, setup the chat session
+        } else if (mChatService == null) {
+            setupChat();
+        }
+    }
+
+
+    @Override
+    public void onStart() {
+        super.onStart();
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        /*if (mChatService != null) {
+            mChatService.stop();
+        }*/
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+
+        // Performing this check in onResume() covers the case in which BT was
+        // not enabled during onStart(), so we were paused to enable it...
+        // onResume() will be called when ACTION_REQUEST_ENABLE activity returns.
+        if (mChatService != null) {
+            // Only if the state is STATE_NONE, do we know that we haven't started already
+            if (mChatService.getState() == BluetoothChatService.STATE_NONE) {
+                // Start the Bluetooth chat services
+                mChatService.start();
+            }
+        }
+    }
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container,
+                             @Nullable Bundle savedInstanceState) {
+        return inflater.inflate(R.layout.fragment_dgns, container, false);
+    }
+
+    @Override
+    public void onViewCreated(View view, @Nullable Bundle savedInstanceState) {
+
+        // Initialize all layout elements
+        trialCode = (EditText) view.findViewById(R.id.trial_code);
+        trialSet = (Button) view.findViewById(R.id.trial_set);
+        spatial = (ImageView) getView().findViewById(R.id.ttn_spatial);
+        temporal = (LineChart) getView().findViewById(R.id.ttn_temporal);
+        init = (ImageButton) view.findViewById(R.id.init);
+        tfp = (ImageButton) view.findViewById(R.id.tfp);
+        lfp = (ImageButton) view.findViewById(R.id.lfp);
+        vref = (ImageButton) view.findViewById(R.id.vref);
+        calib = (ImageButton) view.findViewById(R.id.calib);
+        reg63 = (ImageButton) view.findViewById(R.id.temp);
+        load = (ImageButton) view.findViewById(R.id.load);
+        run = (ImageButton) view.findViewById(R.id.start);
+        pause = (ImageButton) view.findViewById(R.id.pause);
+        slider = (SeekBar) view.findViewById(R.id.seekbar);
+
+
+        ArrayList<Entry> entries = new ArrayList<Entry>();
+
+        entries.add(new Entry(0, 2));
+        entries.add(new Entry(1, 1));
+        entries.add(new Entry(2, 0.5f));
+        entries.add(new Entry(3, 0.2f));
+        entries.add(new Entry(4, 1));
+        entries.add(new Entry(5, 1.2f));
+
+        LineDataSet dataSet = new LineDataSet(entries, "Label"); // add entries to dataset
+        //dataSet.setColors(ColorTemplate.COLORFUL_COLORS);// styling, ...
+        dataSet.setDrawValues(false);
+        final LineData lineData = new LineData(dataSet);
+        temporal.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
+        temporal.getAxisRight().setDrawZeroLine(true);
+        temporal.getAxisRight().setLabelCount(3, true);;
+        temporal.getAxisLeft().setEnabled(false);
+        temporal.getDescription().setEnabled(false);
+        temporal.getLegend().setEnabled(false);
+
+        float cll;
+        for (int i = 0; i<56; i++){
+            for (int j = 0; j < 78; j++){
+                cll = j/78f*2500f;
+                frameArray[i*78+j] = convertColour(cll);
+            }
+        }
+
+       /* for (int i = 0; i<56; i++){
+            for (int j = 0; j < 10; j++){
+                frameArray[i*78+j] = convertColour(100);
+            }
+            for (int j = 10; j < 20; j++){
+                frameArray[i*78+j] = convertColour(500);
+            }
+            for (int j = 20; j < 30; j++){
+                frameArray[i*78+j] = convertColour(1000);
+            }
+            for (int j = 30; j < 40; j++){
+                frameArray[i*78+j] = convertColour(1500);
+            }
+            for (int j = 40; j < 50; j++){
+                frameArray[i*78+j] = convertColour(300);
+            }
+            for (int j = 50; j < 60; j++){
+                frameArray[i*78+j] = convertColour(1800);
+            }
+            for (int j = 60; j < 70; j++){
+                frameArray[i*78+j] = convertColour(2000);
+            }
+            for (int j = 70; j < 78; j++){
+                frameArray[i*78+j] = convertColour(2400);
+            }
+        }*/
+
+        ttnConfig();
+
+        /*run.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                Bitmap bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                bmp.setPixels(frameArray, 0, width, 0, 0, width, height);
+                Bitmap dispBmp = Bitmap.createScaledBitmap(bmp, width*11, height*11, false);
+                spatial.setImageBitmap(dispBmp);
+
+                temporal.setData(lineData);
+                temporal.invalidate(); // refresh
+            }
+        });*/
+        run.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                sendMessage("W");
+            }
+        });
+        pause.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                sendMessage("X");
+            }
+        });
+    }
+
+    /**
+     * Set up the UI and background operations for chat.
+     */
+    private void setupChat() {
+/*
+        // Initialize the array adapter for the conversation thread
+        mConversationArrayAdapter = new ArrayAdapter<String>(getActivity(), R.layout.message);
+
+        mConversationView.setAdapter(mConversationArrayAdapter);
+
+        // Initialize the compose field with a listener for the return key
+        mOutEditText.setOnEditorActionListener(mWriteListener);
+
+        // Initialize the send button with a listener that for click events
+        mSendButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                // Send a message using content of the edit text widget
+                View view = getView();
+                if (null != view) {
+                    TextView textView = (TextView) view.findViewById(R.id.edit_text_out);
+                    String message = textView.getText().toString();
+                    sendMessage(message);
+                }
+            }
+        });*/
+
+        // Initialize the BluetoothChatService to perform bluetooth connections
+        mChatService = new BluetoothChatService(getActivity(), mHandler);
+
+        // Initialize the buffer for outgoing messages
+        mOutStringBuffer = new StringBuffer("");
+    }
+
+    private void ttnConfig(){
+        init.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                ttnConfigDone = false;
+                sendMessage("Q");
+                init.setBackgroundColor(Color.parseColor("#FFDCDC"));
+            }
+        });
+        tfp.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                ttnConfigDone = false;
+                sendMessage("R");
+                tfp.setBackgroundColor(Color.parseColor("#FFDCDC"));
+            }
+        });
+        lfp.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                ttnConfigDone = false;
+                sendMessage("S");
+                lfp.setBackgroundColor(Color.parseColor("#FFDCDC"));
+            }
+        });
+        vref.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                ttnConfigDone = false;
+                sendMessage("T");
+                vref.setBackgroundColor(Color.parseColor("#FFDCDC"));
+            }
+        });
+        calib.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                ttnConfigDone = false;
+                sendMessage("U");
+                calib.setBackgroundColor(Color.parseColor("#FFDCDC"));
+            }
+        });
+        reg63.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                ttnConfigDone = false;
+                sendMessage("V");
+                reg63.setBackgroundColor(Color.parseColor("#FFDCDC"));
+            }
+        });
+    }
+
+    /**
+     * Sends a message.
+     *
+     * @param message A string of text to send.
+     */
+    private void sendMessage(String message) {
+        // Check that we're actually connected before trying anything
+        if (mChatService.getState() != BluetoothChatService.STATE_CONNECTED) {
+            Toast.makeText(getActivity(), R.string.not_connected, Toast.LENGTH_SHORT).show();
+        }
+        // Check that there's actually something to send
+        if (message.length() > 0) {
+            // Get the message bytes and tell the BluetoothChatService to write
+            byte[] send = message.getBytes();
+            mChatService.write(send);
+
+            // Reset out string buffer to zero and clear the edit text field
+            mOutStringBuffer.setLength(0);
+//            mOutEditText.setText(mOutStringBuffer);
+        }
+    }
+
+    private int convertColour (float value){
+
+        float[] hsv = new float[3];
+        //value += 128;
+       // hsv[0] = (1f - value/255f)*240f; // Span from red = 2500 to blue = 0, ignoring purple
+        hsv[0] = (1f-(value/2500f))*230f;
+        hsv[1] = 0.8f;
+        hsv[2] = 0.9f;
+        return Color.HSVToColor(hsv);
+    }
+
+    /**
+     * The action listener for the EditText widget, to listen for the return key
+     */
+    private TextView.OnEditorActionListener mWriteListener
+            = new TextView.OnEditorActionListener() {
+        public boolean onEditorAction(TextView view, int actionId, KeyEvent event) {
+            // If the action is a key-up event on the return key, send the message
+            if (actionId == EditorInfo.IME_NULL && event.getAction() == KeyEvent.ACTION_UP) {
+                String message = view.getText().toString();
+                sendMessage(message);
+            }
+            return true;
+        }
+    };
+
+
+    /**
+     * The Handler that gets information back from the BluetoothChatService
+     */
+    private final Handler mHandler = new Handler() {
+        @Override
+        public void handleMessage(Message msg) {
+            FragmentActivity activity = getActivity();
+            switch (msg.what) {
+                case Constants.MESSAGE_WRITE:
+                    byte[] writeBuf = (byte[]) msg.obj;
+                    // construct a string from the buffer
+                    //String writeMessage = new String(writeBuf);
+                    //mConversationArrayAdapter.add("Me:  " + writeMessage);
+                    //mConversationArrayAdapter.add(writeMessage);
+                    break;
+                case Constants.MESSAGE_READ:
+                    int[] readBuf = (int[]) msg.obj;
+
+                    if (ttnConfigDone){
+                        for (pixel = 0; pixel<4368; pixel++){
+                            frameArray[pixel] = convertColour(((readBuf[pixel*2] & 0xFF) << 8)|(readBuf[(pixel*2)+1] & 0xFF));
+                            //frameArray[pixel] = convertColour(readBuf[pixel]);
+                        }
+                        /*if (pixel <4368){
+                            pixel += 1;
+                        }
+                        else pixel = 0;*/
+                        //int value = ((readBuf[0] & 0xFF) << 8)|(readBuf[1] & 0xFF);
+                       // ByteBuffer wrapped = ByteBuffer.wrap(readBuf);
+                        //frameArray[pixel] = convertColour(wrapped.getShort(0));
+                        //frameArray[pixel] = convertColour(value);
+//                        frameArray[pixel] = convertColour((readBuf[0] << 8)|readBuf[1]);
+                        Bitmap bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                        bmp.setPixels(frameArray, 0, width, 0, 0, width, height);
+                        Bitmap dispBmp = Bitmap.createScaledBitmap(bmp, width*11, height*11, false);
+                        spatial.setImageBitmap(dispBmp);
+                        //pixel += 1;
+                    }
+                    if (!ttnConfigDone){
+                        switch (readBuf[0]) {
+                            case 'a': init.setBackgroundColor(Color.parseColor("#DCF7C3"));
+                                swInit = true;
+                                break;
+                            case 'b': tfp.setBackgroundColor(Color.parseColor("#DCF7C3"));
+                                swTfp = true;
+                                break;
+                            case 'c': lfp.setBackgroundColor(Color.parseColor("#DCF7C3"));
+                                swLfp = true;
+                                break;
+                            case 'd': vref.setBackgroundColor(Color.parseColor("#DCF7C3"));
+                                swVref = true;
+                                break;
+                            case 'e': calib.setBackgroundColor(Color.parseColor("#DCF7C3"));
+                                swCalib = true;
+                                break;
+                            case 'f': reg63.setBackgroundColor(Color.parseColor("#DCF7C3"));
+                                swReg63 = true;
+                                break;
+                        }
+                        if(swInit&&swTfp&&swLfp&&swVref&&swCalib&&swReg63) {
+                            ttnConfigDone = true;
+                            Bitmap okBmp = BitmapFactory.decodeResource(getResources(), R.drawable.ready);
+                            spatial.setImageBitmap(okBmp);
+                        }
+                    }
+
+                    // construct a string from the valid bytes in the buffer
+                    //String readMessage = new String(readBuf, 0, msg.arg1);
+                    //mConversationArrayAdapter.add(mConnectedDeviceName + ":  " + readMessage);
+                    //mConversationArrayAdapter.add(readMessage);
+                    break;
+                case Constants.MESSAGE_DEVICE_NAME:
+                    // save the connected device's name
+                    mConnectedDeviceName = msg.getData().getString(Constants.DEVICE_NAME);
+                    if (null != activity) {
+                        Toast.makeText(activity, "Connected to "
+                                + mConnectedDeviceName, Toast.LENGTH_SHORT).show();
+                    }
+                    break;
+                case Constants.MESSAGE_TOAST:
+                    if (null != activity) {
+                        Toast.makeText(activity, msg.getData().getString(Constants.TOAST),
+                                Toast.LENGTH_SHORT).show();
+                    }
+                    break;
+            }
+        }
+    };
+
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        switch (requestCode) {
+            case REQUEST_CONNECT_DEVICE_SECURE:
+                // When DeviceListActivity returns with a device to connect
+                if (resultCode == Activity.RESULT_OK) {
+                    connectDevice(data, true);
+                }
+                break;
+            case REQUEST_ENABLE_BT:
+                // When the request to enable Bluetooth returns
+                if (resultCode == Activity.RESULT_OK) {
+                    // Bluetooth is now enabled, so set up a chat session
+                    setupChat();
+                } else {
+                    // User did not enable Bluetooth or an error occurred
+                    Log.d(TAG, "BT not enabled");
+                    Toast.makeText(getActivity(), R.string.bt_not_enabled_leaving,
+                            Toast.LENGTH_SHORT).show();
+                    getActivity().finish();
+                }
+        }
+    }
+
+    /**
+     * Establish connection with other device
+     *
+     * @param data   An {@link Intent} with {@link DeviceListActivity#EXTRA_DEVICE_ADDRESS} extra.
+     * @param secure Socket Security type - Secure (true) , Insecure (false)
+     */
+    private void connectDevice(Intent data, boolean secure) {
+        // Get the device MAC address
+        String address = data.getExtras()
+                .getString(DeviceListActivity.EXTRA_DEVICE_ADDRESS);
+        // Get the BluetoothDevice object
+        BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(address);
+        // Attempt to connect to the device
+        mChatService.connect(device, secure);
+    }
+
+    @Override
+    public void onPrepareOptionsMenu(Menu menu) {
+        menu.findItem(R.id.bluetooth_scan).setVisible(true);
+        super.onPrepareOptionsMenu(menu);
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        if (item.getItemId() == R.id.bluetooth_scan) {
+            // Launch the DeviceListActivity to see devices and do scan
+            Intent serverIntent = new Intent(getActivity(), DeviceListActivity.class);
+            startActivityForResult(serverIntent, REQUEST_CONNECT_DEVICE_SECURE);
+            return true;
+        }
+        else return false;
+    }
+}

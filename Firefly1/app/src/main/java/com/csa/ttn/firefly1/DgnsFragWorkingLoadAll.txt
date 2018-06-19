@@ -1,0 +1,1093 @@
+package com.csa.ttn.firefly1;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.app.Dialog;
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Color;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.content.Intent;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.os.Environment;
+import android.os.Handler;
+import android.os.Message;
+import android.support.annotation.Nullable;
+import android.support.v4.app.Fragment;
+import android.support.v4.app.FragmentActivity;
+import android.text.TextUtils;
+import android.util.Log;
+import android.view.KeyEvent;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.ImageButton;
+import android.widget.ProgressBar;
+import android.widget.SeekBar;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.github.mikephil.charting.charts.LineChart;
+import com.github.mikephil.charting.components.XAxis;
+import com.github.mikephil.charting.data.Entry;
+import com.github.mikephil.charting.data.LineData;
+import com.github.mikephil.charting.data.LineDataSet;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.List;
+
+import static com.google.android.gms.internal.zzagr.runOnUiThread;
+
+public class DgnsFragment extends Fragment{
+
+    private static final String TAG = "DgnsFragment";
+
+    // Intent request codes
+    private static final int REQUEST_CONNECT_DEVICE_SECURE = 1;
+    private static final int REQUEST_ENABLE_BT = 3;
+
+    // Layout Views
+    private TextView trialCodeText;
+    private EditText trialCodeEdit;
+    private String trialCode;
+    private Button trialSet;
+    private ImageButton init;
+    private ImageButton tfp;
+    private ImageButton lfp;
+    private ImageButton vref;
+    private ImageButton reg63;
+    private ImageButton calib;
+    private ImageButton run;
+    private ImageButton load;
+    private ImageButton pause;
+    private SeekBar seekframe;
+    private ImageView spatial;
+    private LineChart temporal;
+    private Handler handler = new Handler();
+
+    private int width = 78;
+    private int height = 56;
+    private int pixel = 0;
+    private String frameArray;
+    private int[] colourArray = new int[width*height];
+    private Bitmap bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+    private float readavg;
+    private float readctr;
+    private double B = (Math.log(10/1.92198))/(63-21);
+    private double A = 1618*(Math.exp(21*B));
+
+    private long startTime;
+    private long elapsedTime;
+
+    private LineDataSet dataSet;
+    private LineData lineData;
+
+    // Switches for activating TTN configuration switches
+    private boolean swInit = false;
+    private boolean swTfp = false;
+    private boolean swLfp = false;
+    private boolean swVref = false;
+    private boolean swCalib = false;
+    private boolean calibShow = false;
+    private boolean swReg63 = false;
+    private boolean runpause = false;
+    private boolean ttnConfigDone = false;
+    private boolean newexp = false;
+
+    // Used when loading saved data
+    private ArrayList<Float> timeIntLoad = new ArrayList<Float>();
+    private ArrayList<Float> avgVsLoad = new ArrayList<Float>();
+    private ArrayList<Double> temperatureLoad = new ArrayList<Double>();
+    private ArrayList<Integer> colourArrayLoad = new ArrayList<Integer>();
+    int frameCount = 0;
+    int[] timeStamps;
+    private boolean dataLoaded = false;
+
+    public static String tfpFileName = "temperaturefootprint.txt";
+    public static String dataFileName = "data.csv";
+    static MenuItem temperature;
+
+    /**
+     * Name of the connected device
+     */
+    private String mConnectedDeviceName = null;
+
+    /**
+     * Array adapter for the conversation thread
+     */
+    //private ArrayAdapter<String> mConversationArrayAdapter;
+
+    /**
+     * String buffer for outgoing messages
+     */
+    private StringBuffer mOutStringBuffer;
+
+    /**
+     * Local Bluetooth adapter
+     */
+    private BluetoothAdapter mBluetoothAdapter = null;
+
+    /**
+     * Member object for the chat services
+     */
+    private BluetoothChatService mChatService = null;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setHasOptionsMenu(true);
+        // Get local Bluetooth adapter
+        mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+
+        // If the adapter is null, then Bluetooth is not supported
+        if (mBluetoothAdapter == null) {
+            FragmentActivity activity = getActivity();
+            Toast.makeText(activity, "Bluetooth is not available", Toast.LENGTH_LONG).show();
+            activity.finish();
+        }
+        // If BT is not on, request that it be enabled.
+        // setupChat() will then be called during onActivityResult
+        if (!mBluetoothAdapter.isEnabled()) {
+            Intent enableIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+            startActivityForResult(enableIntent, REQUEST_ENABLE_BT);
+            // Otherwise, setup the chat session
+        } else if (mChatService == null) {
+            setupChat();
+        }
+    }
+
+
+    @Override
+    public void onStart() {
+        super.onStart();
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (mChatService != null) {
+            mChatService.stop();
+        }
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+
+        // Performing this check in onResume() covers the case in which BT was
+        // not enabled during onStart(), so we were paused to enable it...
+        // onResume() will be called when ACTION_REQUEST_ENABLE activity returns.
+        if (mChatService != null) {
+            // Only if the state is STATE_NONE, do we know that we haven't started already
+            if (mChatService.getState() == BluetoothChatService.STATE_NONE) {
+                // Start the Bluetooth chat services
+                mChatService.start();
+            }
+        }
+    }
+
+    @Override
+    public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container,
+                             @Nullable Bundle savedInstanceState) {
+        return inflater.inflate(R.layout.fragment_dgns, container, false);
+    }
+
+    @Override
+    public void onViewCreated(View view, @Nullable Bundle savedInstanceState) {
+
+        // Initialize all layout elements
+        trialCodeText = (TextView) view.findViewById(R.id.trial_text);
+        trialCodeEdit = (EditText) view.findViewById(R.id.trial_code);
+        trialSet = (Button) view.findViewById(R.id.trial_set);
+        spatial = (ImageView) getView().findViewById(R.id.ttn_spatial);
+        temporal = (LineChart) getView().findViewById(R.id.ttn_temporal);
+        init = (ImageButton) view.findViewById(R.id.init);
+        tfp = (ImageButton) view.findViewById(R.id.tfp);
+        lfp = (ImageButton) view.findViewById(R.id.lfp);
+        vref = (ImageButton) view.findViewById(R.id.vref);
+        calib = (ImageButton) view.findViewById(R.id.calib);
+        reg63 = (ImageButton) view.findViewById(R.id.temp);
+        load = (ImageButton) view.findViewById(R.id.load);
+        run = (ImageButton) view.findViewById(R.id.start);
+        pause = (ImageButton) view.findViewById(R.id.pause);
+        seekframe = (SeekBar) view.findViewById(R.id.seekbar);
+
+
+        ArrayList<Entry> entries = new ArrayList<Entry>();
+
+        entries.add(new Entry(0, 0));
+
+        dataSet = new LineDataSet(entries, "Label"); // add entries to dataset
+        dataSet.setDrawValues(false);
+        dataSet.setColor(R.color.imperialBlue);
+        dataSet.setDrawCircles(false);
+        lineData = new LineData(dataSet);
+        temporal.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
+        temporal.getXAxis().setLabelCount(6, true);
+        temporal.getAxisRight().setDrawZeroLine(true);
+        temporal.getAxisRight().setLabelCount(3, true);
+        temporal.getAxisLeft().setEnabled(false);
+        temporal.getDescription().setEnabled(false);
+        temporal.getLegend().setEnabled(false);
+
+        /*float cll;
+        for (int i = 0; i<56; i++){
+            for (int j = 0; j < 78; j++){
+                cll = j/78f*2500f;
+                frameArray[i*78+j] = convertColour(cll);
+            }
+        }*/
+
+       /* for (int i = 0; i<56; i++){
+            for (int j = 0; j < 10; j++){
+                frameArray[i*78+j] = convertColour(100);
+            }
+            for (int j = 10; j < 20; j++){
+                frameArray[i*78+j] = convertColour(500);
+            }
+            for (int j = 20; j < 30; j++){
+                frameArray[i*78+j] = convertColour(1000);
+            }
+            for (int j = 30; j < 40; j++){
+                frameArray[i*78+j] = convertColour(1500);
+            }
+            for (int j = 40; j < 50; j++){
+                frameArray[i*78+j] = convertColour(300);
+            }
+            for (int j = 50; j < 60; j++){
+                frameArray[i*78+j] = convertColour(1800);
+            }
+            for (int j = 60; j < 70; j++){
+                frameArray[i*78+j] = convertColour(2000);
+            }
+            for (int j = 70; j < 78; j++){
+                frameArray[i*78+j] = convertColour(2400);
+            }
+        }*/
+
+        ttnConfig();
+
+        trialSet.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                trialCode = trialCodeEdit.getText().toString();
+                if (trialCode.matches("")) {
+                    Toast.makeText(getActivity(), R.string.tcode_empty, Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                View view2 = getActivity().getCurrentFocus();
+                if (view2 != null) {
+                    InputMethodManager imm = (InputMethodManager)getActivity().getSystemService(Context.INPUT_METHOD_SERVICE);
+                    imm.hideSoftInputFromWindow(view2.getWindowToken(), 0);
+                }
+                trialCodeEdit.clearFocus();
+                try {
+
+                    File file = new File(Environment.getExternalStorageDirectory(), "/" +
+                            StartActivity.PARENT_DIRECTORY + "/" +
+                            StartActivity.userName + "/" + trialCode + "_" + dataFileName);
+
+                    String header = "Absolute Time,Time Elapsed,Temperature,Vref,Average Output,VsChem";
+                    if (!file.exists()) {
+                        file.createNewFile();
+                        // Second argument to FileWriter must be set 'true' to enable file appending
+                        FileWriter fwInit = new FileWriter(file.getAbsoluteFile(), true);
+                        // Define an output buffer
+                        BufferedWriter bwInit = new BufferedWriter(fwInit);
+                        // Create the headers for each column
+                        bwInit.write(header);
+                        bwInit.newLine();
+                        // .close automatically flushes buffer before closing
+                        bwInit.close();
+                        Toast.makeText(getActivity(), R.string.tcode_ready, Toast.LENGTH_SHORT).show();
+                        newexp = true;
+                    }
+                    else{
+                        Toast.makeText(getActivity(), R.string.tcode_exists, Toast.LENGTH_SHORT).show();
+                        newexp = false;
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+
+        seekframe.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            int progressChanged = 0;
+
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser){
+                progressChanged = progress;
+
+            }
+
+            public void onStartTrackingTouch(SeekBar seekBar) {
+                // TODO Auto-generated method stub
+            }
+
+            public void onStopTrackingTouch(final SeekBar seekBar) {
+                if (dataLoaded){
+                    final AlertDialog.Builder loadDataDialogue = new AlertDialog.Builder(getActivity());
+                    ProgressBar progressBar = new ProgressBar(getActivity());
+                    loadDataDialogue.setView(progressBar);
+                    loadDataDialogue.setTitle("Loading 2D frame");
+                    loadDataDialogue.setCancelable(false);
+
+                    final AlertDialog loadData = loadDataDialogue.create();
+
+                    new AsyncTask<Void, Void, Void>(){
+                        @Override
+                        protected void onPreExecute() {
+                            loadData.show();
+                            super.onPreExecute();
+                        }
+
+                        @Override
+                        protected Void doInBackground(Void... params){
+                            File file = new File(Environment.getExternalStorageDirectory(), "/" +
+                                    StartActivity.PARENT_DIRECTORY + "/" +
+                                    StartActivity.userName + "/" + trialCode + "_" + dataFileName);
+                           // try {
+                                int targetFrame;
+                                //FileReader fs = new FileReader(file);
+                               // BufferedReader br = new BufferedReader(fs);
+
+                                // Seekbar at zero position
+                                if (progressChanged == 0) {
+                                    targetFrame = 0;
+                                }
+                                // Seekbar at maximum position
+                                else if (progressChanged == seekBar.getMax()) {
+                                    targetFrame = frameCount;
+                                }
+                                // Seekbar between the max and min values
+                                else {
+                                    //double frameIndex = ((double)(frameCount - 2) / (double)(seekBar.getMax() - 1)) * (double)progressChanged;
+                                    //targetFrame = (int)Math.round(frameIndex)-1;
+                                    targetFrame = timeStamps[progressChanged];
+                                }
+
+                                // Skip the required number of rows to reach the frame of interest
+                                //for (int i = 0; i < targetFrame+1; i++) {
+                               //     br.readLine();
+                               // }
+                                // Read the desired TTN frame instance
+                             //   String line;
+                               // if ((line = br.readLine()) != null) {
+                               //     for (pixel = 0; pixel < 4368; pixel++) {
+                               //         colourArray[pixel] = convertColour(Integer.parseInt(line.split(",")[5 + pixel]));
+                               //     }
+                               // }
+                                //br.close();
+
+                                for (pixel = 0; pixel < 4368; pixel++) {
+                                        colourArray[pixel] = convertColour(colourArrayLoad.get(targetFrame*4368 + pixel));
+                                }
+                                final String tempnow = "Temp: " + (int)(Math.round(temperatureLoad.get(targetFrame))) + "\u2103";
+                                runOnUiThread(new Runnable() {
+
+                                    @Override
+                                    public void run() {
+                                        //must be called from the UI thread
+
+                                        // Load the desired frame of the TTN readout
+                                        bmp.setPixels(colourArray, 0, width, 0, 0, width, height);
+                                        Bitmap dispBmp = Bitmap.createScaledBitmap(bmp, width*11, height*11, false);
+                                        spatial.setImageBitmap(dispBmp);
+
+                                        temperature.setTitle(tempnow);
+
+                                    }
+                                });
+
+                            //}catch(IOException e) {
+                           //     e.printStackTrace();
+                           // }
+
+                            return null;
+                        }
+
+                        @Override
+                        protected void onPostExecute(Void result) {
+                            loadData.dismiss();
+                            super.onPostExecute(result);
+                        }
+                    }.execute();
+
+
+                }
+            }
+        });
+
+        load.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                dataLoaded = false;
+                if (trialCode.matches("")) {
+                    Toast.makeText(getActivity(), R.string.tcode_empty, Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (!newexp){
+                    timeIntLoad.clear();
+                    avgVsLoad.clear();
+                    temperatureLoad.clear();
+                    colourArrayLoad.clear();
+
+
+                    final AlertDialog.Builder loadDataDialogue = new AlertDialog.Builder(getActivity());
+                    ProgressBar progressBar = new ProgressBar(getActivity());
+                    loadDataDialogue.setView(progressBar);
+                    loadDataDialogue.setTitle("Loading saved data");
+                    loadDataDialogue.setCancelable(false);
+
+                    final AlertDialog loadData = loadDataDialogue.create();
+
+                    new AsyncTask<Void, Void, Void>(){
+                        @Override
+                        protected void onPreExecute() {
+                            loadData.show();
+                            super.onPreExecute();
+                        }
+
+                        @Override
+                        protected Void doInBackground(Void... params){
+                            final File file = new File(Environment.getExternalStorageDirectory(), "/" +
+                                    StartActivity.PARENT_DIRECTORY + "/" +
+                                    StartActivity.userName + "/" + trialCode + "_" + dataFileName);
+
+                            try {
+                                frameCount = 0;
+                                FileReader fs = new FileReader(file);
+                                BufferedReader br = new BufferedReader(fs);
+                                // Skip the header
+                                br.readLine();
+                                br.readLine();
+
+                                while (br.readLine() != null) {
+                                    frameCount++;
+                                }
+                                br.close();
+
+                                timeStamps = new int[seekframe.getMax()];
+                                timeStamps[0] = 0;
+                                double frameInterval = ((double) (frameCount - 2) / (double) (seekframe.getMax() - 1));
+                                for (int f = 1; f < seekframe.getMax(); f++) {
+                                    timeStamps[f] = (int) Math.round(frameInterval * (double) (f));
+                                }
+
+                            }catch(IOException e) {
+                                e.printStackTrace();
+                            }
+                            try {
+                                FileReader fs2 = new FileReader(file);
+                                BufferedReader br2 = new BufferedReader(fs2);
+                                // Load only time intervals, temperature, average Vs
+                                // Skip the header
+                                br2.readLine();
+                                br2.readLine();
+                                // Start here
+                                String line;
+                                /* Split the row string by recognizing "," from csv formats
+                                 * This separates the cells into String[] arrays
+                                 * Ensure entries are not null before reading
+                                 */
+                                while ((line = br2.readLine()) != null) {
+                                    timeIntLoad.add(Float.parseFloat(line.split(",")[1]));
+                                    avgVsLoad.add(Float.parseFloat(line.split(",")[4]));
+                                    temperatureLoad.add(Double.parseDouble(line.split(",")[2]));
+                                }
+                                br2.close();
+                            }catch(IOException e) {
+                                e.printStackTrace();
+                            }
+                            try {
+                                FileReader fs3 = new FileReader(file);
+                                BufferedReader br3 = new BufferedReader(fs3);
+
+                                // Load the selected frames of VsChem readout
+                                // Skip the header
+                                br3.readLine();
+                                br3.readLine();
+                                String line;
+                                // First frame
+                                if ((line = br3.readLine()) != null){
+                                    for(pixel=0; pixel<4368; pixel++){
+                                        colourArrayLoad.add(convertColour(Integer.parseInt(line.split(",")[5+pixel])));
+                                    }
+                                }
+
+                                // At timeStamps
+                                for (int g=0; g<seekframe.getMax()-1; g++) {
+                                    int diff = timeStamps[g+1] - timeStamps[g];
+                                    while(diff>0){
+                                        line = br3.readLine();
+                                        diff--;
+                                    }
+                                    if (line != null) {
+                                        for (pixel = 0; pixel < 4368; pixel++) {
+                                            colourArrayLoad.add(convertColour(Integer.parseInt(line.split(",")[5 + pixel])));
+                                        }
+                                    }
+                                }
+
+                                // Last frame
+                                int lastDiff = frameCount - timeStamps[seekframe.getMax()-2];
+                                while(lastDiff>0){
+                                    line = br3.readLine();
+                                    lastDiff--;
+                                }
+                                if (line != null) {
+                                    for (pixel = 0; pixel < 4368; pixel++) {
+                                        colourArrayLoad.add(convertColour(Integer.parseInt(line.split(",")[5 + pixel])));
+                                    }
+                                }
+
+                                br3.close();
+
+                                dataLoaded = true;
+                            }catch(IOException e) {
+                                e.printStackTrace();
+                            }
+
+                            // Load the average readout curve (static)
+                            ArrayList<Entry> avgData = new ArrayList<Entry>();
+                            avgData.add(new Entry(0, 0));
+
+                            for (int i=0; i<frameCount; i++){
+                                avgData.add(new Entry(timeIntLoad.get(i), avgVsLoad.get(i)));
+                            }
+
+                            LineDataSet avgVs = new LineDataSet(avgData, "Label"); // add entries to dataset
+                            avgVs.setDrawValues(false);
+                            avgVs.setColor(R.color.imperialBlue);
+                            avgVs.setDrawCircles(false);
+                            final LineData avgVsLine = new LineData(avgVs);
+                            runOnUiThread(new Runnable() {
+
+                                @Override
+                                public void run() {
+                                    //must be called from the UI thread
+                                    temporal.setData(avgVsLine);
+                                    temporal.notifyDataSetChanged();
+                                    temporal.invalidate(); // refresh line chart
+
+                                    for (pixel = 0; pixel < 4368; pixel++) {
+                                        colourArray[pixel] = convertColour(colourArrayLoad.get(pixel));
+                                    }
+
+                                    // Load the first frame of the TTN readout
+                                    bmp.setPixels(colourArray, 0, width, 0, 0, width, height);
+                                    Bitmap dispBmp = Bitmap.createScaledBitmap(bmp, width*11, height*11, false);
+                                    spatial.setImageBitmap(dispBmp);
+                                }
+                            });
+
+                            return null;
+                        }
+
+                        @Override
+                        protected void onPostExecute(Void result) {
+                            loadData.dismiss();
+                            super.onPostExecute(result);
+                        }
+                    }.execute();
+                }
+            }
+        });
+
+        run.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (trialCode.matches("")) {
+                    Toast.makeText(getActivity(), R.string.tcode_empty, Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (!newexp){
+                    Toast.makeText(getActivity(), R.string.tcode_empty, Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                ttnConfigDone = true;
+                if(ttnConfigDone){
+                    runpause = true;
+                    swTfp = false;
+                    calibShow = false;
+                    temporal.setData(lineData);
+                    temporal.notifyDataSetChanged();
+                    temporal.invalidate(); // refresh
+                    bluetoothSend("W");
+                    startTime = System.currentTimeMillis();
+                }
+            }
+        });
+        pause.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if(ttnConfigDone && newexp){
+                    newexp = false;
+                    runpause = false;
+                    swTfp = false;
+                    calibShow = false;
+                    bluetoothSend("X");
+                    Toast.makeText(getActivity(), R.string.rec_end, Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+    }
+
+    /**
+     * Set up the UI and background operations for chat.
+     */
+    private void setupChat() {
+/*
+        // Initialize the array adapter for the conversation thread
+        mConversationArrayAdapter = new ArrayAdapter<String>(getActivity(), R.layout.message);
+
+        mConversationView.setAdapter(mConversationArrayAdapter);
+
+        // Initialize the compose field with a listener for the return key
+        mOutEditText.setOnEditorActionListener(mWriteListener);
+
+        // Initialize the send button with a listener that for click events
+        mSendButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                // Send a message using content of the edit text widget
+                View view = getView();
+                if (null != view) {
+                    TextView textView = (TextView) view.findViewById(R.id.edit_text_out);
+                    String message = textView.getText().toString();
+                    sendMessage(message);
+                }
+            }
+        });*/
+
+        // Initialize the BluetoothChatService to perform bluetooth connections
+        mChatService = new BluetoothChatService(getActivity(), mHandler);
+
+        // Initialize the buffer for outgoing messages
+        mOutStringBuffer = new StringBuffer("");
+    }
+
+    private void ttnConfig(){
+        init.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                ttnConfigDone = false;
+                swTfp = false;
+                calibShow = false;
+                bluetoothSend("Q");
+                init.setBackgroundColor(Color.parseColor("#FFDDA5"));
+            }
+        });
+        tfp.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                ttnConfigDone = false;
+                swTfp = true;
+                calibShow = false;
+                bluetoothSend("R");
+                tfp.setBackgroundColor(Color.parseColor("#FFDDA5"));
+            }
+        });
+        lfp.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                ttnConfigDone = false;
+                swTfp = false;
+                calibShow = false;
+                bluetoothSend("S");
+                lfp.setBackgroundColor(Color.parseColor("#FFDDA5"));
+            }
+        });
+        vref.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                ttnConfigDone = false;
+                swTfp = false;
+                calibShow = true;
+                bluetoothSend("T");
+                vref.setBackgroundColor(Color.parseColor("#FFDDA5"));
+            }
+        });
+        calib.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                ttnConfigDone = false;
+                swTfp = false;
+                calibShow = true;
+                bluetoothSend("U");
+                calib.setBackgroundColor(Color.parseColor("#FFDDA5"));
+            }
+        });
+        reg63.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                ttnConfigDone = false;
+                swTfp = false;
+                calibShow = false;
+                bluetoothSend("V");
+                reg63.setBackgroundColor(Color.parseColor("#FFDDA5"));
+            }
+        });
+    }
+
+    /**
+     * Sends a message.
+     *
+     * @param message A string of text to send.
+     */
+    private void bluetoothSend(String message) {
+        // Check that we're actually connected before trying anything
+        if (mChatService.getState() != BluetoothChatService.STATE_CONNECTED) {
+            Toast.makeText(getActivity(), R.string.not_connected, Toast.LENGTH_SHORT).show();
+        }
+        // Check that there's actually something to send
+        if (message.length() > 0) {
+            // Get the message bytes and tell the BluetoothChatService to write
+            byte[] send = message.getBytes();
+            mChatService.write(send);
+
+            // Reset out string buffer to zero
+            mOutStringBuffer.setLength(0);
+        }
+    }
+
+    private int convertColour (float value){
+
+        float[] hsv = new float[3];
+        //value += 128;
+       // hsv[0] = (1f - value/255f)*240f; // Span from red = 2500 to blue = 0, ignoring purple
+        hsv[0] = (1f-(value/1023f))*230f;
+        hsv[1] = 1f;
+        hsv[2] = 0.8f;
+        return Color.HSVToColor(hsv);
+    }
+
+    /**
+     * The action listener for the EditText widget, to listen for the return key
+     */
+    /*private TextView.OnEditorActionListener mWriteListener
+            = new TextView.OnEditorActionListener() {
+        public boolean onEditorAction(TextView view, int actionId, KeyEvent event) {
+            // If the action is a key-up event on the return key, send the message
+            if (actionId == EditorInfo.IME_NULL && event.getAction() == KeyEvent.ACTION_UP) {
+                String message = view.getText().toString();
+                bluetoothSend(message);
+            }
+            return true;
+        }
+    };*/
+
+
+    /**
+     * The Handler that gets information back from the BluetoothChatService
+     */
+    private final Handler mHandler = new Handler() {
+        @Override
+        public void handleMessage(Message msg) {
+            FragmentActivity activity = getActivity();
+            switch (msg.what) {
+                case Constants.MESSAGE_READ:
+                    final byte[] readBuf = (byte[]) msg.obj;
+                    if (ttnConfigDone){
+                        if (runpause){
+                            elapsedTime = System.currentTimeMillis() - startTime;
+                            new AsyncTask<Void, Void, Void>(){
+                                @Override
+                                protected Void doInBackground(Void... params){
+                                    final float secs = (float)(elapsedTime/1000);
+                                    final StringBuffer vschem = new StringBuffer();
+
+                                    for (pixel = 0; pixel<4368; pixel++){
+                                        readavg = 0;
+                                        readctr = 0;
+                                        // frameArray is int[], 32-bit structure; readBuf is byte[], 8-bit 2's complement signed structure
+                                        // Create unsigned value for colour mapping by bit-shifting and concatenating readBuf elements
+                                        int px = ((readBuf[pixel*2] & 0xFF) << 8)|(readBuf[(pixel*2)+1] & 0xFF);
+                                        if (px!=0 || px!=1023){
+                                            readavg += px;
+                                            readctr++;
+                                        }
+                                        vschem.append(px);
+                                        vschem.append(",");
+                                        colourArray[pixel] = convertColour(px);
+                                    }
+                                    runOnUiThread(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            //must be called from the UI thread
+                                            bmp.setPixels(colourArray, 0, width, 0, 0, width, height);
+                                            Bitmap dispBmp = Bitmap.createScaledBitmap(bmp, width*11, height*11, false);
+                                            spatial.setImageBitmap(dispBmp);
+
+                                        }
+                                    });
+
+                                    readavg /= readctr;
+                                    dataSet.addEntry(new Entry(secs, readavg));
+                                    lineData.notifyDataChanged();
+                                    runOnUiThread(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            //must be called from the UI thread
+                                            temporal.notifyDataSetChanged();
+                                            temporal.invalidate(); // refresh line chart
+                                        }
+                                    });
+
+                                    double out = (((readBuf[8738] & 0xFF) << 8)|(readBuf[8739] & 0xFF));
+                                    final double tempnew = (-1/B)*(Math.log(out/A));
+
+                                    double vref_dac = (((readBuf[8736] & 0xFF) << 8)|(readBuf[8737] & 0xFF));
+                                    final double vref = (vref_dac/1023)*10-5;
+
+                                    final String tempnow = "Temp: " + (int)Math.round(tempnew) + "\u2103";
+                                    runOnUiThread(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            //must be called from the UI thread
+                                            temperature.setTitle(tempnow);
+
+                                        }
+                                    });
+
+                                    /* Get the current date and time
+                                    * Calendar outputs in integers, convert to string
+                                    * Maintain double digit format by appending zero when needed, e.g. 01/03/2017 at 05:07:08
+                                    */
+                                    Calendar c = Calendar.getInstance();
+                                    // Add 1 to returned value of MONTH since Jan = 0 and Dec = 11
+                                    int monthOfYear = c.get(Calendar.MONTH) + 1;
+                                    String day = c.get(Calendar.DAY_OF_MONTH) < 10 ? "0" + c.get(Calendar.DAY_OF_MONTH) : c.get(Calendar.DAY_OF_MONTH) + "";
+                                    String month = monthOfYear < 10 ? "0" + monthOfYear: monthOfYear + "";
+                                    String hour = c.get(Calendar.HOUR_OF_DAY) < 10 ? "0" + c.get(Calendar.HOUR_OF_DAY) : c.get(Calendar.HOUR_OF_DAY) + "";
+                                    String minute = c.get(Calendar.MINUTE) < 10 ? "0" + c.get(Calendar.MINUTE) : c.get(Calendar.MINUTE) + "";
+                                    String second = c.get(Calendar.SECOND) < 10 ? "0" + c.get(Calendar.SECOND) : c.get(Calendar.SECOND) + "";
+
+                                    try {
+                                        File file = new File(Environment.getExternalStorageDirectory(), "/" +
+                                                StartActivity.PARENT_DIRECTORY + "/" +
+                                                StartActivity.userName + "/" + trialCode + "_" + dataFileName);
+
+                                        FileWriter fwData = new FileWriter(file.getAbsoluteFile(), true);
+                                        BufferedWriter bwData = new BufferedWriter(fwData);
+                                        // Start a new line first, to make sure data is stored from column A
+                                        bwData.newLine();
+
+                                        bwData.write(day + "/" + month + "/" + c.get(Calendar.YEAR) +
+                                                " at " + hour + ":" + minute + ":" + second + "," +
+                                                String.valueOf(secs) + "," +
+                                                String.valueOf(tempnew) + "," +
+                                                String.valueOf(vref) + "," +
+                                                String.valueOf(readavg) + "," +
+                                                vschem);
+
+                                        bwData.close();
+                                    } catch (IOException e) {
+                                        e.printStackTrace();
+                                    }
+                                    return null;
+                                }
+                            }.execute();
+                        }
+
+                    }
+                    if (!ttnConfigDone && !swTfp && !calibShow){
+                        switch (readBuf[0]) {
+                            case 'a': init.setBackgroundColor(Color.parseColor("#DCF7C3"));
+                                swInit = true;
+                                break;
+                            case 'n': init.setBackgroundColor(Color.parseColor("#FFDCDC"));
+                                swInit = false;
+                                break;
+                            case 'c': lfp.setBackgroundColor(Color.parseColor("#DCF7C3"));
+                                swLfp = true;
+                                break;
+                            case 'f': reg63.setBackgroundColor(Color.parseColor("#DCF7C3"));
+                                swReg63 = true;
+                                break;
+                            case 's':
+                                swLfp = false;
+                                byte[] tempfootprintload = Arrays.copyOf(readBuf, 988);
+                                // Add the entry to MapMarkerLocation.csv in the Firefly folder
+                                try {
+
+                                    File file = new File(Environment.getExternalStorageDirectory(), "/" +
+                                            StartActivity.PARENT_DIRECTORY + "/" +
+                                            StartActivity.userName+ "/" + tfpFileName);
+
+                                    if (!file.exists()) {
+                                        Toast.makeText(activity, "No existing temperature footprint", Toast.LENGTH_SHORT).show();
+                                        lfp.setBackgroundColor(Color.parseColor("#FFDCDC"));
+                                        byte[] tmpend = {(byte)0xFF};
+                                        mChatService.write(tmpend);
+                                    }else{
+                                        FileInputStream fiData = new FileInputStream(file.getAbsoluteFile());
+                                        // Store the data into the file
+                                        fiData.read(tempfootprintload);
+                                        // Release resources associated to the outputStream
+                                        fiData.close();
+
+                                        Toast.makeText(activity, "Temperature footprint found", Toast.LENGTH_SHORT).show();
+
+                                        // Send the temperature footprint to Pixie
+                                        mChatService.write(tempfootprintload);
+
+                                        // Reset out string buffer to zero
+                                        mOutStringBuffer.setLength(0);
+                                    }
+
+
+                                } catch (IOException e) {
+                                    e.printStackTrace();
+                                }
+                                break;
+                        }
+                        if(swInit&&swLfp&&swVref&&swCalib&&swReg63) {
+                            ttnConfigDone = true;
+                            Bitmap okBmp = BitmapFactory.decodeResource(getResources(), R.drawable.ready);
+                            spatial.setImageBitmap(okBmp);
+                        }
+                    }
+                    else if (!ttnConfigDone && swTfp && !calibShow){
+                        if (readBuf[988] == 'b'){
+                            byte[] tempfootprintsave = Arrays.copyOf(readBuf, 988);
+                            // Add the entry to temperaturefootprint.txt in the Firefly folder
+                            try {
+
+                                File file = new File(Environment.getExternalStorageDirectory(), "/" +
+                                        StartActivity.PARENT_DIRECTORY + "/" +
+                                        StartActivity.userName+ "/" + tfpFileName);
+
+                                if (!file.exists()) {
+                                    file.createNewFile();
+                                }
+                                // Second argument to FileOutputStream must be set 'false' to enable file overwriting
+                                FileOutputStream foData = new FileOutputStream(file.getAbsoluteFile(), false);
+                                // Store the data into the file
+                                foData.write(tempfootprintsave);
+                                // Release resources associated to the outputStream
+                                foData.close();
+
+                                Toast.makeText(activity, "Temperature footprint created", Toast.LENGTH_SHORT).show();
+
+
+                            } catch (IOException e) {
+                                e.printStackTrace();
+                            }
+                            tfp.setBackgroundColor(Color.parseColor("#DCF7C3"));
+                            swTfp = false;
+                        }
+                    }
+                    else if (!ttnConfigDone && !swTfp && calibShow){
+                        for (pixel = 0; pixel<4368; pixel++){
+                            // frameArray is int[], 32-bit structure; readBuf is byte[], 8-bit 2's complement signed structure
+                            // Create unsigned value for colour mapping by bit-shifting and concatenating readBuf elements
+                            colourArray[pixel] = convertColour(((readBuf[pixel*2] & 0xFF) << 8)|(readBuf[(pixel*2)+1] & 0xFF));
+                        }
+
+                        bmp.setPixels(colourArray, 0, width, 0, 0, width, height);
+                        Bitmap dispBmp = Bitmap.createScaledBitmap(bmp, width*11, height*11, false);
+                        spatial.setImageBitmap(dispBmp);
+
+                        if (readBuf[8736] == 'd'){
+                            vref.setBackgroundColor(Color.parseColor("#DCF7C3"));
+                            swVref = true;
+                        }
+                        else if (readBuf[8736] == 'e'){
+                            calib.setBackgroundColor(Color.parseColor("#DCF7C3"));
+                            swCalib = true;
+                        }
+                        calibShow = false;
+
+                        // Reset out string buffer to zero
+                       // mOutStringBuffer.setLength(0);
+                    }
+                    break;
+                case Constants.MESSAGE_DEVICE_NAME:
+                    // save the connected device's name
+                    mConnectedDeviceName = msg.getData().getString(Constants.DEVICE_NAME);
+                    if (null != activity) {
+                        Toast.makeText(activity, "Connected to "
+                                + mConnectedDeviceName, Toast.LENGTH_SHORT).show();
+                    }
+                    break;
+                case Constants.MESSAGE_TOAST:
+                    if (null != activity) {
+                        Toast.makeText(activity, msg.getData().getString(Constants.TOAST),
+                                Toast.LENGTH_SHORT).show();
+                    }
+                    break;
+            }
+        }
+    };
+
+    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        switch (requestCode) {
+            case REQUEST_CONNECT_DEVICE_SECURE:
+                // When DeviceListActivity returns with a device to connect
+                if (resultCode == Activity.RESULT_OK) {
+                    connectDevice(data, true);
+                }
+                break;
+            case REQUEST_ENABLE_BT:
+                // When the request to enable Bluetooth returns
+                if (resultCode == Activity.RESULT_OK) {
+                    // Bluetooth is now enabled, so set up a chat session
+                    setupChat();
+                } else {
+                    // User did not enable Bluetooth or an error occurred
+                    Log.d(TAG, "BT not enabled");
+                    Toast.makeText(getActivity(), R.string.bt_not_enabled_leaving,
+                            Toast.LENGTH_SHORT).show();
+                    getActivity().finish();
+                }
+        }
+    }
+
+    /**
+     * Establish connection with other device
+     *
+     * @param data   An {@link Intent} with {@link DeviceListActivity#EXTRA_DEVICE_ADDRESS} extra.
+     * @param secure Socket Security type - Secure (true) , Insecure (false)
+     */
+    private void connectDevice(Intent data, boolean secure) {
+        // Get the device MAC address
+        String address = data.getExtras()
+                .getString(DeviceListActivity.EXTRA_DEVICE_ADDRESS);
+        // Get the BluetoothDevice object
+        BluetoothDevice device = mBluetoothAdapter.getRemoteDevice(address);
+        // Attempt to connect to the device
+        mChatService.connect(device, secure);
+    }
+
+    @Override
+    public void onPrepareOptionsMenu(Menu menu) {
+        temperature = menu.getItem(0);
+        menu.findItem(R.id.bluetooth_scan).setVisible(true);
+        menu.findItem(R.id.temperature).setVisible(true);
+        super.onPrepareOptionsMenu(menu);
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        if (item.getItemId() == R.id.bluetooth_scan) {
+            // Launch the DeviceListActivity to see devices and do scan
+            Intent serverIntent = new Intent(getActivity(), DeviceListActivity.class);
+            startActivityForResult(serverIntent, REQUEST_CONNECT_DEVICE_SECURE);
+            return true;
+        }
+        else return false;
+    }
+}
